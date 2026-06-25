@@ -104,19 +104,34 @@ LOG_PATH  = "./study_log.json"
 OUT_DIR   = "./quizzes"
 
 
-def load_sources(max_chars=60000):
-    """Load KB text. For a big library, retrieve a rotating subset instead of all of it."""
-    text = []
-    for path in sorted(glob.glob(KB_GLOB)):
-        with open(path, encoding="utf-8") as f:
-            text.append(f"### SOURCE: {os.path.basename(path)}\n{f.read()}")
-    if not text:
+def _rotate(paths, max_files, day_index):
+    """Pick a deterministic, day-rotating window of up to max_files paths (cyclic).
+
+    With more files than max_files, the window advances by one each day so the
+    whole library is covered over time. Returns all paths when no limit applies.
+    """
+    if not max_files or len(paths) <= max_files:
+        return paths
+    start = day_index % len(paths)
+    return [paths[(start + i) % len(paths)] for i in range(max_files)]
+
+
+def load_sources(max_chars=60000, max_files=None, day_index=None):
+    """Load KB text. For a big library, rotate a subset across days for full coverage."""
+    paths = sorted(glob.glob(KB_GLOB))
+    if not paths:
         raise SystemExit(
             f"No source files found matching {KB_GLOB}. "
             "Add your markdown study material under ./kb/ and run again."
         )
+    if day_index is None:
+        day_index = datetime.date.today().toordinal()
+    text = []
+    for path in _rotate(paths, max_files, day_index):
+        with open(path, encoding="utf-8") as f:
+            text.append(f"### SOURCE: {os.path.basename(path)}\n{f.read()}")
     blob = "\n\n".join(text)
-    return blob[:max_chars]  # keep within a sane context budget; rotate files across days for full coverage
+    return blob[:max_chars]  # keep within a sane context budget
 
 
 def load_log():
@@ -149,8 +164,8 @@ def _parse_quiz(raw: str) -> dict:
         ) from e
 
 
-def generate_quiz(exam="ASP", n=10):
-    sources = load_sources()
+def generate_quiz(exam="ASP", n=10, kb_files=None):
+    sources = load_sources(max_files=kb_files)
     log = load_log()
 
     performance = {
@@ -267,6 +282,64 @@ def grade_and_report(quiz=None, answers=None, output_fn=print):
 
 
 # ---------------------------------------------------------------------------
+# Progress / readiness dashboard
+# ---------------------------------------------------------------------------
+READINESS_THRESHOLD = 80  # per-domain % bar from STUDY_PLAN.md
+
+
+def compute_stats(log):
+    """Summarize cumulative performance from a log dict (pure; easy to test)."""
+    acc = log.get("domain_accuracy", {})
+    domains = {
+        d: {
+            "pct": round(100 * v["correct"] / v["total"]),
+            "correct": v["correct"],
+            "total": v["total"],
+        }
+        for d, v in acc.items() if v["total"]
+    }
+    answered = sum(v["total"] for v in acc.values())
+    correct = sum(v["correct"] for v in acc.values())
+    lagging = sorted(d for d, s in domains.items() if s["pct"] < READINESS_THRESHOLD)
+    return {
+        "domains": domains,
+        "overall": round(100 * correct / answered) if answered else 0,
+        "answered": answered,
+        "lagging": lagging,
+        "ready": bool(domains) and not lagging,
+        "quizzes_generated": len(log.get("history", [])),
+    }
+
+
+def print_stats(log=None, output_fn=print):
+    """Print a per-domain accuracy table plus the readiness verdict."""
+    log = log or load_log()
+    s = compute_stats(log)
+
+    output_fn("Per-domain accuracy:")
+    if s["domains"]:
+        for d, info in sorted(s["domains"].items()):
+            bar = "#" * (info["pct"] // 10)
+            output_fn(f"  {d:10s} {info['pct']:3d}%  (n={info['total']:<3d}) {bar}")
+    else:
+        output_fn("  (no graded questions yet — run with --interactive or --grade)")
+
+    output_fn(
+        f"Overall: {s['overall']}%  ·  {s['answered']} answered  ·  "
+        f"{s['quizzes_generated']} quizzes generated"
+    )
+
+    if not s["domains"]:
+        pass
+    elif s["ready"]:
+        output_fn(f"Readiness: ON TRACK — every attempted domain >= {READINESS_THRESHOLD}%.")
+        output_fn("           (Only reflects domains quizzed so far; ensure your KB covers the full blueprint.)")
+    else:
+        output_fn(f"Readiness: NOT YET — below {READINESS_THRESHOLD}% in: {', '.join(s['lagging'])}")
+    return s
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 def main(argv=None):
@@ -279,13 +352,22 @@ def main(argv=None):
                         help="After generating, present the quiz, collect answers, and grade")
     parser.add_argument("--grade", action="store_true",
                         help="Skip generation; grade today's already-generated quiz interactively")
+    parser.add_argument("--stats", action="store_true",
+                        help="Show per-domain accuracy and a readiness check, then exit")
+    parser.add_argument("--kb-files", type=int, default=None, metavar="N",
+                        help="Use only N KB files per run, rotating the selection across days "
+                             "for full coverage of a large library")
     args = parser.parse_args(argv)
+
+    if args.stats:
+        print_stats()
+        return
 
     if args.grade:
         grade_and_report()
         return
 
-    quiz = generate_quiz(exam=args.exam, n=args.num)
+    quiz = generate_quiz(exam=args.exam, n=args.num, kb_files=args.kb_files)
 
     if args.interactive:
         grade_and_report(quiz=quiz)

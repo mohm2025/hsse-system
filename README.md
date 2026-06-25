@@ -25,6 +25,8 @@ python quiz_engine.py                  # generate ASP, 10 questions (default)
 python quiz_engine.py --exam CSP -n 15 # generate CSP, 15 questions
 python quiz_engine.py --interactive    # generate, answer interactively, and grade
 python quiz_engine.py --grade          # grade today's already-generated quiz
+python quiz_engine.py --stats          # per-domain accuracy + readiness check
+python quiz_engine.py --kb-files 5     # generate from a day-rotating subset of 5 KB files
 python quiz_engine.py --help           # all flags
 ```
 
@@ -36,6 +38,25 @@ Generation writes `quizzes/quiz_YYYY-MM-DD.json` and updates `study_log.json`.
 | `-n, --num N` | Number of questions to generate (default: 10) |
 | `-i, --interactive` | After generating, present the quiz, collect A/B/C/D answers, and grade |
 | `--grade` | Skip generation; grade today's quiz interactively |
+| `--stats` | Show per-domain accuracy and the ≥80%-per-domain readiness check, then exit |
+| `--kb-files N` | Generate from only N KB files, rotating the selection across days so a large library is fully covered over time |
+
+### Checking readiness
+
+```bash
+python quiz_engine.py --stats
+```
+
+```
+Per-domain accuracy:
+  ASP-D1      60%  (n=10 ) ######
+  ASP-D2      90%  (n=10 ) #########
+  ASP-D4      80%  (n=10 ) ########
+Overall: 77%  ·  30 answered  ·  3 quizzes generated
+Readiness: NOT YET — below 80% in: ASP-D1
+```
+
+The readiness bar (≥80% in every attempted domain) matches [`STUDY_PLAN.md`](STUDY_PLAN.md). It only reflects domains you've been quizzed on, so keep your KB covering the full blueprint.
 
 ## Recording results (for adaptivity)
 

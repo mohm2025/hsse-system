@@ -158,6 +158,65 @@ class EndToEndTests(unittest.TestCase):
         self.assertTrue(any("2/2" in line for line in lines))
 
 
+class RotateTests(unittest.TestCase):
+    def test_returns_all_when_under_limit(self):
+        paths = ["a", "b", "c"]
+        self.assertEqual(quiz_engine._rotate(paths, 5, 0), paths)
+        self.assertEqual(quiz_engine._rotate(paths, None, 0), paths)
+
+    def test_window_advances_by_day_and_wraps(self):
+        paths = ["a", "b", "c", "d"]
+        self.assertEqual(quiz_engine._rotate(paths, 2, 0), ["a", "b"])
+        self.assertEqual(quiz_engine._rotate(paths, 2, 1), ["b", "c"])
+        # Wraps around the end of the list.
+        self.assertEqual(quiz_engine._rotate(paths, 2, 3), ["d", "a"])
+        # Same day_index is deterministic.
+        self.assertEqual(quiz_engine._rotate(paths, 2, 4), quiz_engine._rotate(paths, 2, 0))
+
+    def test_load_sources_respects_max_files(self):
+        with tempfile.TemporaryDirectory() as d:
+            for name in ("a.md", "b.md", "c.md"):
+                with open(os.path.join(d, name), "w") as f:
+                    f.write(name)
+            with mock.patch.object(quiz_engine, "KB_GLOB", os.path.join(d, "*.md")):
+                blob = quiz_engine.load_sources(max_files=1, day_index=0)
+        self.assertIn("### SOURCE: a.md", blob)
+        self.assertNotIn("### SOURCE: b.md", blob)
+
+
+class ComputeStatsTests(unittest.TestCase):
+    def test_ready_when_all_domains_at_or_above_threshold(self):
+        log = {"domain_accuracy": {
+            "ASP-D1": {"correct": 9, "total": 10},   # 90%
+            "ASP-D2": {"correct": 8, "total": 10},   # 80%
+        }, "history": [{}, {}]}
+        s = quiz_engine.compute_stats(log)
+        self.assertTrue(s["ready"])
+        self.assertEqual(s["lagging"], [])
+        self.assertEqual(s["overall"], 85)
+        self.assertEqual(s["quizzes_generated"], 2)
+
+    def test_lagging_domain_blocks_readiness(self):
+        log = {"domain_accuracy": {
+            "ASP-D1": {"correct": 9, "total": 10},   # 90%
+            "ASP-D4": {"correct": 5, "total": 10},   # 50%
+        }}
+        s = quiz_engine.compute_stats(log)
+        self.assertFalse(s["ready"])
+        self.assertEqual(s["lagging"], ["ASP-D4"])
+
+    def test_empty_log_is_not_ready(self):
+        s = quiz_engine.compute_stats({"domain_accuracy": {}, "history": []})
+        self.assertFalse(s["ready"])
+        self.assertEqual(s["overall"], 0)
+
+    def test_print_stats_reports_lagging(self):
+        log = {"domain_accuracy": {"ASP-D4": {"correct": 5, "total": 10}}}
+        lines = []
+        quiz_engine.print_stats(log=log, output_fn=lines.append)
+        self.assertTrue(any("NOT YET" in line and "ASP-D4" in line for line in lines))
+
+
 class PromptAnswersTests(unittest.TestCase):
     def test_collects_and_skips(self):
         # q1 answered 'b' (lowercased -> B), q2 skipped via empty Enter.

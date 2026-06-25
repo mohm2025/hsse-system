@@ -15,7 +15,6 @@ from unittest import mock
 
 import quiz_engine
 
-
 SAMPLE_QUIZ = {
     "exam": "ASP",
     "selection_rationale": "Blueprint default mix with extra D2 weight.",

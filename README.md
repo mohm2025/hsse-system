@@ -49,17 +49,19 @@ accuracy = record_results({"abc123": "B", "def456": "A"})
 print(accuracy)   # e.g. {"ASP-D2": 80, "ASP-D4": 50}
 ```
 
-## Tests
+## Tests & linting
 
 ```bash
-python -m unittest -v
+pip install -r requirements-dev.txt   # ruff
+python -m unittest -v                  # tests
+ruff check .                           # lint
 ```
 
-The suite mocks the Anthropic client, so it runs **without an API key** and covers the full generate → parse → persist → grade path offline.
+The test suite mocks the Anthropic client, so it runs **without an API key** and covers the full generate → parse → persist → grade path offline. Lint config lives in `ruff.toml`.
 
 ## Claude Code on the web
 
-`.claude/hooks/session-start.sh` (registered in `.claude/settings.json`) installs the Python dependencies on session start in web sessions, so tests and the engine work out of the box. It runs synchronously and only in remote sessions.
+`.claude/hooks/session-start.sh` (registered in `.claude/settings.json`) installs the runtime and dev dependencies on session start in web sessions, so tests, linting, and the engine work out of the box. It runs **asynchronously** (the session starts immediately while deps install in the background) and only in remote sessions.
 
 ## Daily schedule (cron, 7am)
 

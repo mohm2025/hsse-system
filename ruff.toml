@@ -1,0 +1,6 @@
+# Ruff lint configuration. Run: ruff check .
+target-version = "py311"
+line-length = 120
+
+[lint]
+select = ["E", "F", "I", "B", "UP"]

@@ -20,11 +20,11 @@ Schedule: add a cron line (bottom of file) to run it daily.
 Model strings change over time — confirm the latest at https://docs.claude.com/en/api/overview
 """
 
-import os
-import json
+import argparse
 import datetime
 import glob
-import argparse
+import json
+import os
 
 from anthropic import Anthropic
 
@@ -146,7 +146,7 @@ def _parse_quiz(raw: str) -> dict:
         raise SystemExit(
             f"Model did not return valid JSON ({e}).\n"
             f"--- first 500 chars of response ---\n{raw[:500]}"
-        )
+        ) from e
 
 
 def generate_quiz(exam="ASP", n=10):

@@ -21,14 +21,25 @@ Add your study material as markdown files under `./kb/`. A placeholder sample is
 ## Run
 
 ```bash
-python quiz_engine.py
+python quiz_engine.py                  # generate ASP, 10 questions (default)
+python quiz_engine.py --exam CSP -n 15 # generate CSP, 15 questions
+python quiz_engine.py --interactive    # generate, answer interactively, and grade
+python quiz_engine.py --grade          # grade today's already-generated quiz
+python quiz_engine.py --help           # all flags
 ```
 
-This writes `quizzes/quiz_YYYY-MM-DD.json` and updates `study_log.json`.
+Generation writes `quizzes/quiz_YYYY-MM-DD.json` and updates `study_log.json`.
+
+| Flag | Meaning |
+|------|---------|
+| `--exam {ASP,CSP}` | Which BCSP exam to target (default: `ASP`) |
+| `-n, --num N` | Number of questions to generate (default: 10) |
+| `-i, --interactive` | After generating, present the quiz, collect A/B/C/D answers, and grade |
+| `--grade` | Skip generation; grade today's quiz interactively |
 
 ## Recording results (for adaptivity)
 
-After a study session, feed the user's answers back so tomorrow's quiz adapts to weak domains:
+`--interactive` / `--grade` close the loop for you. To record answers programmatically:
 
 ```python
 from quiz_engine import record_results
@@ -37,6 +48,18 @@ from quiz_engine import record_results
 accuracy = record_results({"abc123": "B", "def456": "A"})
 print(accuracy)   # e.g. {"ASP-D2": 80, "ASP-D4": 50}
 ```
+
+## Tests
+
+```bash
+python -m unittest -v
+```
+
+The suite mocks the Anthropic client, so it runs **without an API key** and covers the full generate → parse → persist → grade path offline.
+
+## Claude Code on the web
+
+`.claude/hooks/session-start.sh` (registered in `.claude/settings.json`) installs the Python dependencies on session start in web sessions, so tests and the engine work out of the box. It runs synchronously and only in remote sessions.
 
 ## Daily schedule (cron, 7am)
 

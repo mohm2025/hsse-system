@@ -26,6 +26,8 @@ python quiz_engine.py --exam CSP -n 15 # generate CSP, 15 questions
 python quiz_engine.py --interactive    # generate, answer interactively, and grade
 python quiz_engine.py --grade          # grade today's already-generated quiz
 python quiz_engine.py --stats          # per-domain accuracy + readiness check
+python quiz_engine.py --review         # re-quiz previously missed questions (spaced repetition)
+python quiz_engine.py --export-md      # write a printable Markdown quiz (answer key at the end)
 python quiz_engine.py --kb-files 5     # generate from a day-rotating subset of 5 KB files
 python quiz_engine.py --help           # all flags
 ```
@@ -39,6 +41,8 @@ Generation writes `quizzes/quiz_YYYY-MM-DD.json` and updates `study_log.json`.
 | `-i, --interactive` | After generating, present the quiz, collect A/B/C/D answers, and grade |
 | `--grade` | Skip generation; grade today's quiz interactively |
 | `--stats` | Show per-domain accuracy and the ≥80%-per-domain readiness check, then exit |
+| `--review` | Re-quiz previously missed questions (spaced repetition); mastered items leave the pool. Up to `--num` of them |
+| `--export-md` | Write the generated quiz to a printable Markdown file (`quizzes/quiz_YYYY-MM-DD.md`), answer key at the end |
 | `--kb-files N` | Generate from only N KB files, rotating the selection across days so a large library is fully covered over time |
 
 ### Checking readiness

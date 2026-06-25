@@ -138,7 +138,7 @@ def load_log():
     if os.path.exists(LOG_PATH):
         with open(LOG_PATH, encoding="utf-8") as f:
             return json.load(f)
-    return {"domain_accuracy": {}, "recent_ids": [], "history": []}
+    return {"domain_accuracy": {}, "recent_ids": [], "history": [], "missed": []}
 
 
 def save_log(log):
@@ -217,21 +217,35 @@ def load_today_quiz():
         return json.load(f)
 
 
-def record_results(answers: dict):
-    """answers = {question_id: 'A'/'B'/... }. Call after the user answers; updates per-domain accuracy."""
-    quiz = load_today_quiz()
-    log = load_log()
-    acc = log["domain_accuracy"]
+def _apply_results(quiz, answers, log):
+    """Update per-domain accuracy and the spaced-repetition 'missed' pool in-place.
+
+    Wrong answers add the full question to the pool; answering one correctly
+    (e.g. during --review) removes it. Returns the cumulative accuracy map.
+    """
+    acc = log.setdefault("domain_accuracy", {})
+    missed_by_id = {q["id"]: q for q in log.setdefault("missed", [])}
     for q in quiz["questions"]:
-        d = q["domain"]
         got = answers.get(q["id"])
         if got is None:
             continue
-        rec = acc.setdefault(d, {"correct": 0, "total": 0})
+        rec = acc.setdefault(q["domain"], {"correct": 0, "total": 0})
         rec["total"] += 1
-        rec["correct"] += int(got == q["correct"])
-    save_log(log)
+        if got == q["correct"]:
+            rec["correct"] += 1
+            missed_by_id.pop(q["id"], None)   # mastered — drop from the review pool
+        else:
+            missed_by_id[q["id"]] = q          # remember for review
+    log["missed"] = list(missed_by_id.values())
     return {d: round(100 * v["correct"] / v["total"]) for d, v in acc.items() if v["total"]}
+
+
+def record_results(answers: dict):
+    """answers = {question_id: 'A'/'B'/... }. Call after the user answers; updates per-domain accuracy."""
+    log = load_log()
+    accuracy = _apply_results(load_today_quiz(), answers, log)
+    save_log(log)
+    return accuracy
 
 
 # ---------------------------------------------------------------------------
@@ -259,16 +273,9 @@ def prompt_answers(quiz, input_fn=input, output_fn=print):
     return answers
 
 
-def grade_and_report(quiz=None, answers=None, output_fn=print):
-    """Grade answers against today's quiz, record results, and print a per-domain report."""
-    quiz = quiz or load_today_quiz()
-    if answers is None:
-        answers = prompt_answers(quiz, output_fn=output_fn)
-
+def _report_scores(quiz, answers, accuracy, output_fn):
     correct = sum(1 for q in quiz["questions"] if answers.get(q["id"]) == q["correct"])
     graded = sum(1 for q in quiz["questions"] if q["id"] in answers)
-    accuracy = record_results(answers)
-
     output_fn("\n" + "=" * 40)
     if graded:
         output_fn(f"Score: {correct}/{graded} ({round(100 * correct / graded)}%)")
@@ -278,7 +285,65 @@ def grade_and_report(quiz=None, answers=None, output_fn=print):
     for domain, pct in sorted(accuracy.items()):
         output_fn(f"  {domain}: {pct}%")
     output_fn("=" * 40)
+
+
+def grade_and_report(quiz=None, answers=None, output_fn=print):
+    """Grade answers against today's quiz, record results, and print a per-domain report."""
+    quiz = quiz or load_today_quiz()
+    if answers is None:
+        answers = prompt_answers(quiz, output_fn=output_fn)
+    log = load_log()
+    accuracy = _apply_results(quiz, answers, log)
+    save_log(log)
+    _report_scores(quiz, answers, accuracy, output_fn)
     return accuracy
+
+
+def review_missed(limit=None, answers=None, output_fn=print, input_fn=input):
+    """Re-present previously missed questions (spaced repetition). Mastered items leave the pool."""
+    log = load_log()
+    missed = log.get("missed", [])
+    if not missed:
+        output_fn("No missed questions to review yet — answer some quizzes first (--interactive).")
+        return {}
+    pool = missed[:limit] if limit else missed
+    quiz = {"questions": pool}
+    output_fn(f"Reviewing {len(pool)} missed question(s)...")
+    if answers is None:
+        answers = prompt_answers(quiz, input_fn=input_fn, output_fn=output_fn)
+    accuracy = _apply_results(quiz, answers, log)
+    save_log(log)
+    _report_scores(quiz, answers, accuracy, output_fn)
+    output_fn(f"Remaining in review pool: {len(log.get('missed', []))}")
+    return accuracy
+
+
+# ---------------------------------------------------------------------------
+# Markdown export (printable, offline study)
+# ---------------------------------------------------------------------------
+def quiz_to_markdown(quiz):
+    """Render a quiz as printable Markdown: questions first, answer key at the end."""
+    lines = [f"# {quiz.get('exam', 'ASP/CSP')} Practice Quiz", ""]
+    if quiz.get("selection_rationale"):
+        lines += [f"_{quiz['selection_rationale']}_", ""]
+    for i, q in enumerate(quiz["questions"], 1):
+        lines.append(f"**{i}. ({q['domain']} · {q['difficulty']})** {q['stem']}")
+        for letter in ("A", "B", "C", "D"):
+            lines.append(f"- {letter}. {q['options'][letter]}")
+        lines.append("")
+    lines += ["---", "", "## Answer key", ""]
+    for i, q in enumerate(quiz["questions"], 1):
+        lines.append(f"{i}. **{q['correct']}** — {q['explanation']} _(source: {q['source']})_")
+    return "\n".join(lines) + "\n"
+
+
+def export_markdown(quiz, path=None):
+    """Write the quiz to a printable .md file; returns the path."""
+    os.makedirs(OUT_DIR, exist_ok=True)
+    path = path or _quiz_path().replace(".json", ".md")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(quiz_to_markdown(quiz))
+    return path
 
 
 # ---------------------------------------------------------------------------
@@ -354,6 +419,10 @@ def main(argv=None):
                         help="Skip generation; grade today's already-generated quiz interactively")
     parser.add_argument("--stats", action="store_true",
                         help="Show per-domain accuracy and a readiness check, then exit")
+    parser.add_argument("--review", action="store_true",
+                        help="Re-quiz previously missed questions (spaced repetition); up to --num of them")
+    parser.add_argument("--export-md", action="store_true",
+                        help="Write the generated quiz to a printable Markdown file (answer key at the end)")
     parser.add_argument("--kb-files", type=int, default=None, metavar="N",
                         help="Use only N KB files per run, rotating the selection across days "
                              "for full coverage of a large library")
@@ -363,15 +432,22 @@ def main(argv=None):
         print_stats()
         return
 
+    if args.review:
+        review_missed(limit=args.num)
+        return
+
     if args.grade:
         grade_and_report()
         return
 
     quiz = generate_quiz(exam=args.exam, n=args.num, kb_files=args.kb_files)
 
+    if args.export_md:
+        print(f"Exported {export_markdown(quiz)}")
+
     if args.interactive:
         grade_and_report(quiz=quiz)
-    else:
+    elif not args.export_md:
         print(json.dumps(quiz, indent=2)[:1500], "...")
 
 

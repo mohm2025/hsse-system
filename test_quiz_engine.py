@@ -158,6 +158,132 @@ class EndToEndTests(unittest.TestCase):
         self.assertTrue(any("2/2" in line for line in lines))
 
 
+class RotateTests(unittest.TestCase):
+    def test_returns_all_when_under_limit(self):
+        paths = ["a", "b", "c"]
+        self.assertEqual(quiz_engine._rotate(paths, 5, 0), paths)
+        self.assertEqual(quiz_engine._rotate(paths, None, 0), paths)
+
+    def test_window_advances_by_day_and_wraps(self):
+        paths = ["a", "b", "c", "d"]
+        self.assertEqual(quiz_engine._rotate(paths, 2, 0), ["a", "b"])
+        self.assertEqual(quiz_engine._rotate(paths, 2, 1), ["b", "c"])
+        # Wraps around the end of the list.
+        self.assertEqual(quiz_engine._rotate(paths, 2, 3), ["d", "a"])
+        # Same day_index is deterministic.
+        self.assertEqual(quiz_engine._rotate(paths, 2, 4), quiz_engine._rotate(paths, 2, 0))
+
+    def test_load_sources_respects_max_files(self):
+        with tempfile.TemporaryDirectory() as d:
+            for name in ("a.md", "b.md", "c.md"):
+                with open(os.path.join(d, name), "w") as f:
+                    f.write(name)
+            with mock.patch.object(quiz_engine, "KB_GLOB", os.path.join(d, "*.md")):
+                blob = quiz_engine.load_sources(max_files=1, day_index=0)
+        self.assertIn("### SOURCE: a.md", blob)
+        self.assertNotIn("### SOURCE: b.md", blob)
+
+
+class ComputeStatsTests(unittest.TestCase):
+    def test_ready_when_all_domains_at_or_above_threshold(self):
+        log = {"domain_accuracy": {
+            "ASP-D1": {"correct": 9, "total": 10},   # 90%
+            "ASP-D2": {"correct": 8, "total": 10},   # 80%
+        }, "history": [{}, {}]}
+        s = quiz_engine.compute_stats(log)
+        self.assertTrue(s["ready"])
+        self.assertEqual(s["lagging"], [])
+        self.assertEqual(s["overall"], 85)
+        self.assertEqual(s["quizzes_generated"], 2)
+
+    def test_lagging_domain_blocks_readiness(self):
+        log = {"domain_accuracy": {
+            "ASP-D1": {"correct": 9, "total": 10},   # 90%
+            "ASP-D4": {"correct": 5, "total": 10},   # 50%
+        }}
+        s = quiz_engine.compute_stats(log)
+        self.assertFalse(s["ready"])
+        self.assertEqual(s["lagging"], ["ASP-D4"])
+
+    def test_empty_log_is_not_ready(self):
+        s = quiz_engine.compute_stats({"domain_accuracy": {}, "history": []})
+        self.assertFalse(s["ready"])
+        self.assertEqual(s["overall"], 0)
+
+    def test_print_stats_reports_lagging(self):
+        log = {"domain_accuracy": {"ASP-D4": {"correct": 5, "total": 10}}}
+        lines = []
+        quiz_engine.print_stats(log=log, output_fn=lines.append)
+        self.assertTrue(any("NOT YET" in line and "ASP-D4" in line for line in lines))
+
+
+class MissedPoolTests(unittest.TestCase):
+    def test_wrong_answer_enters_pool_correct_removes_it(self):
+        log = {"domain_accuracy": {}, "missed": []}
+        # q2 answered wrong -> enters pool; q1 correct -> not in pool.
+        quiz_engine._apply_results(SAMPLE_QUIZ, {"q1": "B", "q2": "A"}, log)
+        self.assertEqual({q["id"] for q in log["missed"]}, {"q2"})
+
+        # Re-answer q2 correctly -> leaves the pool.
+        quiz_engine._apply_results({"questions": [SAMPLE_QUIZ["questions"][1]]}, {"q2": "C"}, log)
+        self.assertEqual(log["missed"], [])
+
+    def test_pool_dedupes_by_id(self):
+        log = {"domain_accuracy": {}, "missed": []}
+        quiz_engine._apply_results(SAMPLE_QUIZ, {"q2": "A"}, log)
+        quiz_engine._apply_results(SAMPLE_QUIZ, {"q2": "D"}, log)  # wrong again
+        self.assertEqual(len(log["missed"]), 1)
+
+
+class ReviewTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self._patch = mock.patch.object(
+            quiz_engine, "LOG_PATH", os.path.join(self._tmp.name, "study_log.json"))
+        self._patch.start()
+
+    def tearDown(self):
+        self._patch.stop()
+        self._tmp.cleanup()
+
+    def test_review_drains_mastered_questions(self):
+        # Seed a log with one missed question (q2, correct answer "C").
+        quiz_engine.save_log({
+            "domain_accuracy": {}, "recent_ids": [], "history": [],
+            "missed": [SAMPLE_QUIZ["questions"][1]],
+        })
+        lines = []
+        quiz_engine.review_missed(answers={"q2": "C"}, output_fn=lines.append)
+        self.assertEqual(quiz_engine.load_log()["missed"], [])
+        self.assertTrue(any("Remaining in review pool: 0" in ln for ln in lines))
+
+    def test_review_with_empty_pool(self):
+        quiz_engine.save_log({"domain_accuracy": {}, "recent_ids": [], "history": [], "missed": []})
+        lines = []
+        result = quiz_engine.review_missed(output_fn=lines.append)
+        self.assertEqual(result, {})
+        self.assertTrue(any("No missed questions" in ln for ln in lines))
+
+
+class MarkdownExportTests(unittest.TestCase):
+    def test_markdown_has_questions_and_answer_key(self):
+        md = quiz_engine.quiz_to_markdown(SAMPLE_QUIZ)
+        self.assertIn("Most effective control in the hierarchy?", md)   # a stem
+        self.assertIn("- B. Elimination", md)                          # an option
+        self.assertIn("## Answer key", md)
+        self.assertIn("1. **B**", md)                                  # correct answer in key
+        # The answer key comes after the questions, not inline.
+        self.assertGreater(md.index("## Answer key"), md.index("Most effective control"))
+
+    def test_export_writes_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch.object(quiz_engine, "OUT_DIR", d):
+                path = quiz_engine.export_markdown(SAMPLE_QUIZ, path=os.path.join(d, "out.md"))
+            self.assertTrue(os.path.exists(path))
+            with open(path) as f:
+                self.assertIn("## Answer key", f.read())
+
+
 class PromptAnswersTests(unittest.TestCase):
     def test_collects_and_skips(self):
         # q1 answered 'b' (lowercased -> B), q2 skipped via empty Enter.

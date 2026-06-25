@@ -25,6 +25,10 @@ python quiz_engine.py                  # generate ASP, 10 questions (default)
 python quiz_engine.py --exam CSP -n 15 # generate CSP, 15 questions
 python quiz_engine.py --interactive    # generate, answer interactively, and grade
 python quiz_engine.py --grade          # grade today's already-generated quiz
+python quiz_engine.py --stats          # per-domain accuracy + readiness check
+python quiz_engine.py --review         # re-quiz previously missed questions (spaced repetition)
+python quiz_engine.py --export-md      # write a printable Markdown quiz (answer key at the end)
+python quiz_engine.py --kb-files 5     # generate from a day-rotating subset of 5 KB files
 python quiz_engine.py --help           # all flags
 ```
 
@@ -36,6 +40,27 @@ Generation writes `quizzes/quiz_YYYY-MM-DD.json` and updates `study_log.json`.
 | `-n, --num N` | Number of questions to generate (default: 10) |
 | `-i, --interactive` | After generating, present the quiz, collect A/B/C/D answers, and grade |
 | `--grade` | Skip generation; grade today's quiz interactively |
+| `--stats` | Show per-domain accuracy and the ≥80%-per-domain readiness check, then exit |
+| `--review` | Re-quiz previously missed questions (spaced repetition); mastered items leave the pool. Up to `--num` of them |
+| `--export-md` | Write the generated quiz to a printable Markdown file (`quizzes/quiz_YYYY-MM-DD.md`), answer key at the end |
+| `--kb-files N` | Generate from only N KB files, rotating the selection across days so a large library is fully covered over time |
+
+### Checking readiness
+
+```bash
+python quiz_engine.py --stats
+```
+
+```
+Per-domain accuracy:
+  ASP-D1      60%  (n=10 ) ######
+  ASP-D2      90%  (n=10 ) #########
+  ASP-D4      80%  (n=10 ) ########
+Overall: 77%  ·  30 answered  ·  3 quizzes generated
+Readiness: NOT YET — below 80% in: ASP-D1
+```
+
+The readiness bar (≥80% in every attempted domain) matches [`STUDY_PLAN.md`](STUDY_PLAN.md). It only reflects domains you've been quizzed on, so keep your KB covering the full blueprint.
 
 ## Recording results (for adaptivity)
 
@@ -63,11 +88,23 @@ The test suite mocks the Anthropic client, so it runs **without an API key** and
 
 `.claude/hooks/session-start.sh` (registered in `.claude/settings.json`) installs the runtime and dev dependencies on session start in web sessions, so tests, linting, and the engine work out of the box. It runs **asynchronously** (the session starts immediately while deps install in the background) and only in remote sessions.
 
-## Daily schedule (cron, 7am)
+## Study plan
 
-```cron
-0 7 * * *  cd /path/to/app && python quiz_engine.py
+See [`STUDY_PLAN.md`](STUDY_PLAN.md) for a domain-weighted ASP → CSP schedule (sequenced by blueprint weight, with a readiness bar of ≥80% per domain).
+
+## Daily automation (cron)
+
+Use the helper in [`scripts/daily_quiz.sh`](scripts/daily_quiz.sh) so a fresh quiz is generated each morning:
+
+```bash
+echo 'ANTHROPIC_API_KEY=sk-...' > .env     # git-ignored; cron can't see your shell env
+chmod +x scripts/daily_quiz.sh
+crontab -e
+# add (use absolute paths — cron has a minimal environment):
+# 0 7 * * *  /ABS/PATH/hsse-system/scripts/daily_quiz.sh >> /ABS/PATH/hsse-system/quizzes/cron.log 2>&1
 ```
+
+Override the exam or count with env vars: `QUIZ_EXAM=CSP QUIZ_N=15 scripts/daily_quiz.sh`.
 
 ## Model
 

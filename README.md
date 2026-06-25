@@ -1,5 +1,7 @@
 # ASP/CSP Adaptive Quiz Engine
 
+[![CI](https://github.com/mohm2025/hsse-system/actions/workflows/ci.yml/badge.svg)](https://github.com/mohm2025/hsse-system/actions/workflows/ci.yml)
+
 A minimal, runnable backend for a daily study app built on the [Anthropic API](https://docs.claude.com/en/api/overview). Each run it:
 
 1. Loads your knowledge-base text (markdown files / chapter excerpts under `./kb/`).
@@ -83,6 +85,14 @@ ruff check .                           # lint
 ```
 
 The test suite mocks the Anthropic client, so it runs **without an API key** and covers the full generate → parse → persist → grade path offline. Lint config lives in `ruff.toml`.
+
+### Demo
+
+```bash
+python examples/demo.py
+```
+
+An offline (mocked) end-to-end walkthrough — generate → answer → grade → stats → review → export — no API key needed. **CI** (`.github/workflows/ci.yml`) runs ruff, the tests, and this demo on every push and PR.
 
 ## Claude Code on the web
 

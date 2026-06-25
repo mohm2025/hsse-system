@@ -12,6 +12,9 @@ What it does each run:
 
 Install:  pip install -r requirements.txt
 Run:      ANTHROPIC_API_KEY=sk-... python quiz_engine.py
+          python quiz_engine.py --exam CSP -n 15
+          python quiz_engine.py --interactive        # generate, answer, and grade
+          python quiz_engine.py --grade              # grade today's already-generated quiz
 Schedule: add a cron line (bottom of file) to run it daily.
 
 Model strings change over time — confirm the latest at https://docs.claude.com/en/api/overview
@@ -21,11 +24,23 @@ import os
 import json
 import datetime
 import glob
+import argparse
 
 from anthropic import Anthropic
 
-client = Anthropic()  # reads ANTHROPIC_API_KEY from env
 MODEL = "claude-sonnet-4-6"   # good accuracy/cost balance; "claude-opus-4-8" for harder reasoning
+
+# A single, lazily-created client. Constructing Anthropic() resolves the API key
+# eagerly, so we defer it to first use — this keeps the module importable (for
+# tests, --help, and --grade) without ANTHROPIC_API_KEY set.
+_client = None
+
+
+def get_client():
+    global _client
+    if _client is None:
+        _client = Anthropic()  # reads ANTHROPIC_API_KEY from env
+    return _client
 
 # ---------------------------------------------------------------------------
 # THE PROMPT — this is the part that matters. It encodes the blueprint weights,
@@ -116,6 +131,11 @@ def save_log(log):
         json.dump(log, f, indent=2)
 
 
+def _quiz_path(today=None):
+    today = today or datetime.date.today().isoformat()
+    return f"{OUT_DIR}/quiz_{today}.json"
+
+
 def _parse_quiz(raw: str) -> dict:
     """Strip any accidental markdown fencing and parse the model's JSON response."""
     raw = raw.strip()
@@ -146,7 +166,7 @@ def generate_quiz(exam="ASP", n=10):
 
     # Stream so a long JSON payload (10+ detailed questions) can't trip the SDK
     # HTTP timeout; get_final_message() gives us the assembled response.
-    with client.messages.stream(
+    with get_client().messages.stream(
         model=MODEL,
         max_tokens=8000,
         temperature=0.7,                 # variety of phrasing; grounding rule keeps facts fixed
@@ -161,7 +181,7 @@ def generate_quiz(exam="ASP", n=10):
     # persist quiz + update log so tomorrow's run is adaptive
     os.makedirs(OUT_DIR, exist_ok=True)
     today = datetime.date.today().isoformat()
-    with open(f"{OUT_DIR}/quiz_{today}.json", "w", encoding="utf-8") as f:
+    with open(_quiz_path(today), "w", encoding="utf-8") as f:
         json.dump(quiz, f, indent=2)
 
     log["recent_ids"] += [q["id"] for q in quiz["questions"]]
@@ -171,11 +191,20 @@ def generate_quiz(exam="ASP", n=10):
     return quiz
 
 
+def load_today_quiz():
+    """Load the quiz generated today, or exit with a helpful message."""
+    path = _quiz_path()
+    if not os.path.exists(path):
+        raise SystemExit(
+            f"No quiz found at {path}. Run `python quiz_engine.py` first to generate today's quiz."
+        )
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
 def record_results(answers: dict):
     """answers = {question_id: 'A'/'B'/... }. Call after the user answers; updates per-domain accuracy."""
-    today = datetime.date.today().isoformat()
-    with open(f"{OUT_DIR}/quiz_{today}.json", encoding="utf-8") as f:
-        quiz = json.load(f)
+    quiz = load_today_quiz()
     log = load_log()
     acc = log["domain_accuracy"]
     for q in quiz["questions"]:
@@ -190,9 +219,82 @@ def record_results(answers: dict):
     return {d: round(100 * v["correct"] / v["total"]) for d, v in acc.items() if v["total"]}
 
 
+# ---------------------------------------------------------------------------
+# Interactive answer / grading flow
+# ---------------------------------------------------------------------------
+def prompt_answers(quiz, input_fn=input, output_fn=print):
+    """Present each question, collect an A/B/C/D answer, and return {id: letter}.
+
+    input_fn/output_fn are injectable so this can be driven non-interactively in tests.
+    """
+    answers = {}
+    questions = quiz["questions"]
+    for i, q in enumerate(questions, 1):
+        output_fn(f"\nQ{i}/{len(questions)} [{q['domain']} · {q['type']} · {q['difficulty']}]")
+        output_fn(q["stem"])
+        for letter in ("A", "B", "C", "D"):
+            output_fn(f"  {letter}. {q['options'][letter]}")
+        choice = ""
+        while choice not in ("A", "B", "C", "D"):
+            choice = input_fn("Your answer (A/B/C/D, or Enter to skip): ").strip().upper()
+            if choice == "":
+                break  # skip this question
+        if choice in ("A", "B", "C", "D"):
+            answers[q["id"]] = choice
+    return answers
+
+
+def grade_and_report(quiz=None, answers=None, output_fn=print):
+    """Grade answers against today's quiz, record results, and print a per-domain report."""
+    quiz = quiz or load_today_quiz()
+    if answers is None:
+        answers = prompt_answers(quiz, output_fn=output_fn)
+
+    correct = sum(1 for q in quiz["questions"] if answers.get(q["id"]) == q["correct"])
+    graded = sum(1 for q in quiz["questions"] if q["id"] in answers)
+    accuracy = record_results(answers)
+
+    output_fn("\n" + "=" * 40)
+    if graded:
+        output_fn(f"Score: {correct}/{graded} ({round(100 * correct / graded)}%)")
+    else:
+        output_fn("No questions answered.")
+    output_fn("Per-domain accuracy (cumulative):")
+    for domain, pct in sorted(accuracy.items()):
+        output_fn(f"  {domain}: {pct}%")
+    output_fn("=" * 40)
+    return accuracy
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="ASP/CSP Adaptive Quiz Engine")
+    parser.add_argument("--exam", choices=["ASP", "CSP"], default="ASP",
+                        help="Which BCSP exam to target (default: ASP)")
+    parser.add_argument("-n", "--num", type=int, default=10,
+                        help="Number of questions to generate (default: 10)")
+    parser.add_argument("-i", "--interactive", action="store_true",
+                        help="After generating, present the quiz, collect answers, and grade")
+    parser.add_argument("--grade", action="store_true",
+                        help="Skip generation; grade today's already-generated quiz interactively")
+    args = parser.parse_args(argv)
+
+    if args.grade:
+        grade_and_report()
+        return
+
+    quiz = generate_quiz(exam=args.exam, n=args.num)
+
+    if args.interactive:
+        grade_and_report(quiz=quiz)
+    else:
+        print(json.dumps(quiz, indent=2)[:1500], "...")
+
+
 if __name__ == "__main__":
-    quiz = generate_quiz(exam="ASP", n=10)
-    print(json.dumps(quiz, indent=2)[:1500], "...")
+    main()
 
 # ---------------------------------------------------------------------------
 # Daily schedule (cron, runs 7am): 0 7 * * *  cd /path/to/app && python quiz_engine.py

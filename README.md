@@ -63,11 +63,23 @@ The test suite mocks the Anthropic client, so it runs **without an API key** and
 
 `.claude/hooks/session-start.sh` (registered in `.claude/settings.json`) installs the runtime and dev dependencies on session start in web sessions, so tests, linting, and the engine work out of the box. It runs **asynchronously** (the session starts immediately while deps install in the background) and only in remote sessions.
 
-## Daily schedule (cron, 7am)
+## Study plan
 
-```cron
-0 7 * * *  cd /path/to/app && python quiz_engine.py
+See [`STUDY_PLAN.md`](STUDY_PLAN.md) for a domain-weighted ASP → CSP schedule (sequenced by blueprint weight, with a readiness bar of ≥80% per domain).
+
+## Daily automation (cron)
+
+Use the helper in [`scripts/daily_quiz.sh`](scripts/daily_quiz.sh) so a fresh quiz is generated each morning:
+
+```bash
+echo 'ANTHROPIC_API_KEY=sk-...' > .env     # git-ignored; cron can't see your shell env
+chmod +x scripts/daily_quiz.sh
+crontab -e
+# add (use absolute paths — cron has a minimal environment):
+# 0 7 * * *  /ABS/PATH/hsse-system/scripts/daily_quiz.sh >> /ABS/PATH/hsse-system/quizzes/cron.log 2>&1
 ```
+
+Override the exam or count with env vars: `QUIZ_EXAM=CSP QUIZ_N=15 scripts/daily_quiz.sh`.
 
 ## Model
 

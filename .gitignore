@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Secrets
+.env
+
+# Runtime artifacts (generated per run)
+study_log.json
+quizzes/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
